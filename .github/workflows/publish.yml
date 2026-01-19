@@ -1,0 +1,43 @@
+name: Publish to npm
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+
+      - name: Skip version bump commits
+        run: |
+          if git log -1 --pretty=%B | grep -q "chore: bump version"; then
+            echo "Version bump commit detected, skipping."
+            exit 0
+          fi
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: https://registry.npmjs.org/
+
+      - run: npm ci
+
+      - run: |
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+          npm version patch -m "chore: bump version %s"
+          git push
+
+      - run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
