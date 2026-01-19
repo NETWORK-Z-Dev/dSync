@@ -1,6 +1,6 @@
 {
   "name": "@hackthedev/dsync",
-  "version": "1.0.8",
+  "version": "1.0.9",
   "description": "",
   "main": "index.mjs",
   "type": "module",
