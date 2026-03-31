@@ -2,7 +2,12 @@ import express from "express"
 import { randomUUID } from "crypto"
 
 export default class dSync {
-    constructor(prefix, app) {
+    constructor({
+                    prefix = null,
+                    app = null,
+                    host = null,
+                    dSyncWeb = null
+                } = {}) {
         if (!prefix || typeof prefix !== "string" || prefix.length <= 0) {
             console.error("Prefix string is required for dSync!")
             process.exit(0)
@@ -12,11 +17,19 @@ export default class dSync {
             process.exit(0)
         }
 
+        if(!host) {
+            console.error("Host domain is required for dSync!")
+            process.exit(0)
+        }
+
+        this.host = host;
+
         this.prefix = prefix
         this.handlers = new Map()
         this.peers = new Set()
         this.seenEvents = new Map()
         this.gossipDelay = this.getDynamicDelay()
+        this.dSyncWeb = dSyncWeb;
 
         app.use(express.json())
         app.post(`/${this.prefix}`, async (req, res) => {
@@ -82,8 +95,7 @@ export default class dSync {
                     continue
                 }
 
-                const extendedPayload = {
-                    ...payload,
+                const rateInfo = {
                     ipRateLimited,
                     rateLimited: globalRateLimited,
                     rateLimitedIP: ip
@@ -100,9 +112,8 @@ export default class dSync {
                     }
 
                     try {
-                        const r = h.handler(extendedPayload, cb)
+                        const r = h.handler(payload, cb, rateInfo)
 
-                        // if returns promise
                         if (r instanceof Promise) {
                             r.then(val => cb(val)).catch(err => cb({ error: err.message }))
                         }
@@ -112,8 +123,16 @@ export default class dSync {
                 })
 
                 if (!responded) {
-                    res.json(maybeResponse)
+                    res.json({ payload: maybeResponse, ratelimit: rateInfo })
                     responded = true
+                }
+
+                // for dsync event viewer if applicable lol
+                if(this.dSyncWeb) {
+                    this.dSyncWeb.logEvent(event, source, {
+                        payload,
+                        response: maybeResponse
+                    })
                 }
             }
 
@@ -146,8 +165,41 @@ export default class dSync {
         })
     }
 
-    addPeer(url) {
+    addPeer(url, noAutoConvert = false) {
+        url = noAutoConvert ? url : `https://${this.extractHost(url)}`
+
+        // add it to db if web viewer exists
+        if(this.dSyncWeb) {
+            this.dSyncWeb.addNetworkServer(this.extractHost(url))
+        }
+
         this.peers.add(url)
+    }
+
+    extractHost(url) {
+        if (!url) return null;
+        const s = String(url).trim();
+
+        const looksLikeBareIPv6 = !s.includes('://') && !s.includes('/') && s.includes(':') && /^[0-9A-Fa-f:.]+$/.test(s);
+        const withProto = looksLikeBareIPv6 ? `https://[${s}]` : (s.includes('://') ? s : `https://${s}`);
+
+        try {
+            const u = new URL(withProto);
+            const host = u.hostname; // IPv6 returned without brackets
+            const port = u.port;
+            if (host.includes(':')) {
+                return port ? `[${host}]:${port}` : host;
+            }
+            return port ? `${host}:${port}` : host;
+        } catch (e) {
+            const re = /^(?:https?:\/\/)?(?:[^@\/\n]+@)?([^:\/?#]+)(?::(\d+))?(?:[\/?#]|$)/i;
+            const m = s.match(re);
+            if (!m) return null;
+            const hostname = m[1].replace(/^\[(.*)\]$/, '$1');
+            const port = m[2];
+            if (hostname.includes(':')) return port ? `[${hostname}]:${port}` : hostname;
+            return port ? `${hostname}:${port}` : hostname;
+        }
     }
 
     async emit(event, dataOrCallback, maybeCallback) {
@@ -181,12 +233,12 @@ export default class dSync {
                 const res = await fetch(`${url}/${this.prefix}`, {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ event, payload, eventId, source: "self" })
+                    body: JSON.stringify({ event, payload, eventId, source: this.host })
                 })
-                const data = await res.json().catch(() => undefined)
-                results.push({ url, data })
+                const raw = await res.json().catch(() => undefined)
+                results.push({ host: url, payload: raw?.payload || null, ratelimit: raw?.ratelimit || null })
             } catch (err) {
-                results.push({ url, error: err.message })
+                results.push({ host: url, error: err.message })
             }
         }
 
