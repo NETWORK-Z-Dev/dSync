@@ -1,7 +1,7 @@
 {
   "name": "@hackthedev/dsync",
   "version": "1.0.10",
-  "description": "",
+  "description": "Library for server-to-server communication with a socket.io like syntax",
   "main": "index.mjs",
   "type": "module",
   "scripts": {
